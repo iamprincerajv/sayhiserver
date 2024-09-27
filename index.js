@@ -57,6 +57,7 @@ io.on("connection", (socket) => {
   // DB operations
   // SIGNUP
   socket.on("signup", (data) => {
+    // Check if user already exists
     connection.query(
       "SELECT * FROM users WHERE email = ?",
       [data.email],
@@ -73,6 +74,7 @@ io.on("connection", (socket) => {
           return;
         }
 
+        // Insert user into DB
         const query =
           "INSERT INTO users (name, email, password) VALUES (?, ? , ?)";
         console.log("incoming data", data);
@@ -86,9 +88,15 @@ io.on("connection", (socket) => {
               return;
             }
 
+            // Create verification code
+            const verificationCode = Math.floor(100000 + Math.random() * 900000);
+
+            // Send verification email
             const sendverifyEmail = await sendEmail({
+              name: data.name,
               email: data.email,
               subject: "Verify your email",
+              code: verificationCode,
             });
 
             if (!sendverifyEmail) {
