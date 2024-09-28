@@ -1,5 +1,6 @@
 const { Server } = require("socket.io");
 const mysql = require("mysql2");
+const bcrypt = require("bcryptjs");
 const sendEmail = require("./utils/sendEmail");
 require("dotenv").config();
 
@@ -74,22 +75,26 @@ io.on("connection", (socket) => {
           return;
         }
 
+        // Create verification code
+        const verificationCode = Math.floor(100000 + Math.random() * 900000);
+
+        // Create hash of password
+        const salt = bcrypt.genSaltSync(10);
+        const hash = bcrypt.hashSync(data.password, salt);
+
         // Insert user into DB
         const query =
-          "INSERT INTO users (name, email, password) VALUES (?, ? , ?)";
+          "INSERT INTO users (name, email, password, verifyCode, isVerified) VALUES (?, ? , ? , ?, ?)";
         console.log("incoming data", data);
         connection.query(
           query,
-          [data.name, data.email, data.password],
+          [data.name, data.email, hash, verificationCode, 0],
           async (error, results) => {
             if (error) {
               console.log("error 2", error.message);
               io.to(socket.id).emit("signup:error", { error: error.message });
               return;
             }
-
-            // Create verification code
-            const verificationCode = Math.floor(100000 + Math.random() * 900000);
 
             // Send verification email
             const sendverifyEmail = await sendEmail({
@@ -111,6 +116,45 @@ io.on("connection", (socket) => {
               id: results.insertId,
               name: data.name,
               email: data.email,
+            });
+          }
+        );
+      }
+    );
+  });
+
+  // VERIFY EMAIL
+  socket.on("verifyEmail", (data) => {
+    const { email, verifyCode } = data;
+    connection.query(
+      "SELECT * FROM users WHERE email = ? AND verifyCode = ?",
+      [email, verifyCode],
+      (error, results) => {
+        if (error) {
+          console.log("error in verifyEmail", error.message);
+          io.to(socket.id).emit("verify:failed", { message: error.message });
+          return;
+        }
+
+        if (results.length === 0) {
+          io.to(socket.id).emit("verify:failed", {
+            message: "Verification failed",
+          });
+          return;
+        }
+
+        connection.query(
+          "UPDATE users SET isVerified = 1, verifyCode = NULL WHERE email = ?",
+          [email],
+          (error, results) => {
+            if (error) {
+              console.log("error in updating isVerified", error.message);
+              io.to(socket.id).emit("verify:failed", { message: error.message });
+              return;
+            }
+
+            io.to(socket.id).emit("verify:done", {
+              message: "Email verified",
             });
           }
         );
