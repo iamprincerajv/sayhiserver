@@ -64,7 +64,6 @@ io.on("connection", (socket) => {
       [data.email],
       (error, results) => {
         if (error) {
-          console.log("error 1", error.message);
           io.to(socket.id).emit("signup:error", { error: error.message });
           return;
         }
@@ -85,13 +84,11 @@ io.on("connection", (socket) => {
         // Insert user into DB
         const query =
           "INSERT INTO users (name, email, password, verifyCode, isVerified) VALUES (?, ? , ? , ?, ?)";
-        console.log("incoming data", data);
         connection.query(
           query,
           [data.name, data.email, hash, verificationCode, 0],
           async (error, results) => {
             if (error) {
-              console.log("error 2", error.message);
               io.to(socket.id).emit("signup:error", { error: error.message });
               return;
             }
@@ -105,7 +102,6 @@ io.on("connection", (socket) => {
             });
 
             if (!sendverifyEmail) {
-              console.log("Error sending email");
               io.to(socket.id).emit("signup:error", {
                 error: "Error sending email",
               });
@@ -131,7 +127,6 @@ io.on("connection", (socket) => {
       [email, verifyCode],
       (error, results) => {
         if (error) {
-          console.log("error in verifyEmail", error.message);
           io.to(socket.id).emit("verify:failed", { message: error.message });
           return;
         }
@@ -148,7 +143,6 @@ io.on("connection", (socket) => {
           [email],
           (error, results) => {
             if (error) {
-              console.log("error in updating isVerified", error.message);
               io.to(socket.id).emit("verify:failed", { message: error.message });
               return;
             }
@@ -158,6 +152,42 @@ io.on("connection", (socket) => {
             });
           }
         );
+      }
+    );
+  });
+
+  // SIGNIN
+  socket.on("signin", (data) => {
+    connection.query(
+      "SELECT * FROM users WHERE email = ?",
+      [data.email],
+      (error, results) => {
+        if (error) {
+          io.to(socket.id).emit("signin:failed", { message: error.message });
+          return;
+        }
+
+        if (results.length === 0) {
+          io.to(socket.id).emit("signin:failed", {
+            message: "User not found",
+          });
+          return;
+        }
+
+        const user = results[0];
+        const isMatch = bcrypt.compareSync(data.password, user.password);
+        if (!isMatch) {
+          io.to(socket.id).emit("signin:failed", {
+            message: "Incorrect password",
+          });
+          return;
+        }
+
+        io.to(socket.id).emit("signin:done", {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+        });
       }
     );
   });
