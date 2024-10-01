@@ -55,6 +55,10 @@ io.on("connection", (socket) => {
     io.to(to).emit("peer:nego:final", { from: socket.id, ans });
   });
 
+  socket.on("user:disconnect", ({ to }) => {
+    io.to(to).emit("user:disconnect", { from: socket.id });
+  });
+
   // DB operations
   // SIGNUP
   socket.on("signup", (data) => {
