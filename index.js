@@ -8,21 +8,27 @@ const io = new Server(8000, {
   cors: true,
 });
 
-// MySQL connection setup
-const connection = mysql.createConnection({
+// MySQL connection pool setup
+const pool = mysql.createPool({
   host: process.env.HOST,
   user: process.env.USER,
   password: process.env.PASSWORD,
   database: process.env.DATABASE,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  maxIdle: 0,
+  idleTimeout: 60000,
+  enableKeepAlive: true,
 });
 
-connection.connect((err) => {
-  if (err) {
-    console.error("Error connecting to MySQL:", err.stack);
-    return;
-  }
-  console.log("Connected to MySQL as id " + connection.threadId);
-});
+// connection.connect((err) => {
+//   if (err) {
+//     console.error("Error connecting to MySQL:", err.stack);
+//     return;
+//   }
+//   console.log("Connected to MySQL as id " + connection.threadId);
+// });
 
 const emailToSocketIdMap = new Map();
 const socketIdToEmail = new Map();
@@ -62,137 +68,176 @@ io.on("connection", (socket) => {
   // DB operations
   // SIGNUP
   socket.on("signup", (data) => {
-    // Check if user already exists
-    connection.query(
-      "SELECT * FROM users WHERE email = ?",
-      [data.email],
-      (error, results) => {
-        if (error) {
-          io.to(socket.id).emit("signup:error", { error: error.message });
-          return;
-        }
-        if (results.length > 0) {
-          io.to(socket.id).emit("signup:error", {
-            error: "User already exists with this email",
-          });
-          return;
-        }
-
-        // Create verification code
-        const verificationCode = Math.floor(100000 + Math.random() * 900000);
-
-        // Create hash of password
-        const salt = bcrypt.genSaltSync(10);
-        const hash = bcrypt.hashSync(data.password, salt);
-
-        // Insert user into DB
-        const query =
-          "INSERT INTO users (name, email, password, verifyCode, isVerified) VALUES (?, ? , ? , ?, ?)";
-        connection.query(
-          query,
-          [data.name, data.email, hash, verificationCode, 0],
-          async (error, results) => {
-            if (error) {
-              io.to(socket.id).emit("signup:error", { error: error.message });
-              return;
-            }
-
-            // Send verification email
-            const sendverifyEmail = await sendEmail({
-              name: data.name,
-              email: data.email,
-              subject: "Verify your email",
-              code: verificationCode,
-            });
-
-            if (!sendverifyEmail) {
-              io.to(socket.id).emit("signup:error", {
-                error: "Error sending email",
-              });
-              return;
-            }
-
-            io.to(socket.id).emit("signup:done", {
-              id: results.insertId,
-              name: data.name,
-              email: data.email,
-            });
-          }
-        );
+    pool.getConnection((err, connection) => {
+      if (err) {
+        io.to(socket.id).emit("signup:error", { error: err.message });
+        return;
       }
-    );
+      console.log("Connected to MySQL ", connection.threadId);
+
+      // Check if user already exists
+      connection.query(
+        "SELECT * FROM users WHERE email = ?",
+        [data.email],
+        (error, results) => {
+          if (error) {
+            io.to(socket.id).emit("signup:error", { error: error.message });
+            connection.release();
+            return;
+          }
+          if (results.length > 0) {
+            io.to(socket.id).emit("signup:error", {
+              error: "User already exists with this email",
+            });
+            connection.release();
+            return;
+          }
+
+          // Create verification code
+          const verificationCode = Math.floor(100000 + Math.random() * 900000);
+
+          // Create hash of password
+          const salt = bcrypt.genSaltSync(10);
+          const hash = bcrypt.hashSync(data.password, salt);
+
+          // Insert user into DB
+          const query =
+            "INSERT INTO users (name, email, password, verifyCode, isVerified) VALUES (?, ? , ? , ?, ?)";
+          connection.query(
+            query,
+            [data.name, data.email, hash, verificationCode, 0],
+            async (error, results) => {
+              if (error) {
+                io.to(socket.id).emit("signup:error", { error: error.message });
+                connection.release();
+                return;
+              }
+
+              // Send verification email
+              const sendverifyEmail = await sendEmail({
+                name: data.name,
+                email: data.email,
+                subject: "Verify your email",
+                code: verificationCode,
+              });
+
+              if (!sendverifyEmail) {
+                io.to(socket.id).emit("signup:error", {
+                  error: "Error sending email",
+                });
+                connection.release();
+                return;
+              }
+
+              io.to(socket.id).emit("signup:done", {
+                id: results.insertId,
+                name: data.name,
+                email: data.email,
+              });
+              connection.release();
+            }
+          );
+        }
+      );
+    });
   });
 
   // VERIFY EMAIL
   socket.on("verifyEmail", (data) => {
-    const { email, verifyCode } = data;
-    connection.query(
-      "SELECT * FROM users WHERE email = ? AND verifyCode = ?",
-      [email, verifyCode],
-      (error, results) => {
-        if (error) {
-          io.to(socket.id).emit("verify:failed", { message: error.message });
-          return;
-        }
-
-        if (results.length === 0) {
-          io.to(socket.id).emit("verify:failed", {
-            message: "Verification failed",
-          });
-          return;
-        }
-
-        connection.query(
-          "UPDATE users SET isVerified = 1, verifyCode = NULL WHERE email = ?",
-          [email],
-          (error, results) => {
-            if (error) {
-              io.to(socket.id).emit("verify:failed", { message: error.message });
-              return;
-            }
-
-            io.to(socket.id).emit("verify:done", {
-              message: "Email verified",
-            });
-          }
-        );
+    pool.getConnection((err, connection) => {
+      if (err) {
+        io.to(socket.id).emit("signup:error", { error: err.message });
+        return;
       }
-    );
+      console.log("Connected to MySQL ", connection.threadId);
+
+      const { email, verifyCode } = data;
+      connection.query(
+        "SELECT * FROM users WHERE email = ? AND verifyCode = ?",
+        [email, verifyCode],
+        (error, results) => {
+          if (error) {
+            io.to(socket.id).emit("verify:failed", { message: error.message });
+            connection.release();
+            return;
+          }
+
+          if (results.length === 0) {
+            io.to(socket.id).emit("verify:failed", {
+              message: "Verification failed",
+            });
+            connection.release();
+            return;
+          }
+
+          connection.query(
+            "UPDATE users SET isVerified = 1, verifyCode = NULL WHERE email = ?",
+            [email],
+            (error, results) => {
+              if (error) {
+                io.to(socket.id).emit("verify:failed", {
+                  message: error.message,
+                });
+                connection.release();
+                return;
+              }
+
+              io.to(socket.id).emit("verify:done", {
+                message: "Email verified",
+              });
+              connection.release();
+            }
+          );
+        }
+      );
+    });
   });
 
   // SIGNIN
   socket.on("signin", (data) => {
-    connection.query(
-      "SELECT * FROM users WHERE email = ?",
-      [data.email],
-      (error, results) => {
-        if (error) {
-          io.to(socket.id).emit("signin:failed", { message: error.message });
-          return;
-        }
-
-        if (results.length === 0) {
-          io.to(socket.id).emit("signin:failed", {
-            message: "User not found",
-          });
-          return;
-        }
-
-        const user = results[0];
-        const isMatch = bcrypt.compareSync(data.password, user.password);
-        if (!isMatch) {
-          io.to(socket.id).emit("signin:failed", {
-            message: "Incorrect password",
-          });
-          return;
-        }
-
-        io.to(socket.id).emit("signin:done", {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-        });
+    pool.getConnection((err, connection) => {
+      if (err) {
+        io.to(socket.id).emit("signup:error", { error: err.message });
+        return;
       }
-    );
+      console.log("Connected to MySQL ", connection.threadId);
+
+      connection.query(
+        "SELECT * FROM users WHERE email = ?",
+        [data.email],
+        (error, results) => {
+          if (error) {
+            io.to(socket.id).emit("signin:failed", { message: error.message });
+            connection.release();
+            return;
+          }
+
+          if (results.length === 0) {
+            io.to(socket.id).emit("signin:failed", {
+              message: "User not found",
+            });
+            connection.release();
+            return;
+          }
+
+          const user = results[0];
+          const isMatch = bcrypt.compareSync(data.password, user.password);
+          if (!isMatch) {
+            io.to(socket.id).emit("signin:failed", {
+              message: "Incorrect password",
+            });
+            connection.release();
+            return;
+          }
+
+          io.to(socket.id).emit("signin:done", {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+          });
+          connection.release();
+        }
+      );
+    });
   });
 });
