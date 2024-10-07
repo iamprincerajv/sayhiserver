@@ -22,24 +22,38 @@ const pool = mysql.createPool({
   enableKeepAlive: true,
 });
 
-// connection.connect((err) => {
-//   if (err) {
-//     console.error("Error connecting to MySQL:", err.stack);
-//     return;
-//   }
-//   console.log("Connected to MySQL as id " + connection.threadId);
-// });
+pool.on("connection", (connection) => {
+  console.log("Connection established with MySQL", connection.threadId);
+});
 
-const emailToSocketIdMap = new Map();
-const socketIdToEmail = new Map();
+// In-memory store to manage room occupancy
+const rooms = {};
+
+// When a user joins a room
+function joinRoom(roomId, userId) {
+  if (!rooms[roomId]) {
+    rooms[roomId] = [];
+  }
+  if (rooms[roomId].length >= 2) {
+    // Room is full, reject the new user
+    return false;
+  }
+  rooms[roomId].push(userId);
+  return true;
+}
 
 io.on("connection", (socket) => {
   console.log("Socket", socket.id);
 
   socket.on("room:join", (data) => {
     const { email, room } = data;
-    emailToSocketIdMap.set(email, socket.id);
-    socketIdToEmail.set(socket.id, email);
+
+    if (!joinRoom(room, socket.id)) {
+      // Room is full, reject the new user
+      io.to(socket.id).emit("room:join:failed", { message: "Room is full" });
+      return;
+    }
+    
     io.to(room).emit("user:joined", { email, id: socket.id });
     socket.join(room);
     io.to(socket.id).emit("room:join", data);
@@ -73,7 +87,6 @@ io.on("connection", (socket) => {
         io.to(socket.id).emit("signup:error", { error: err.message });
         return;
       }
-      console.log("Connected to MySQL ", connection.threadId);
 
       // Check if user already exists
       connection.query(
@@ -149,7 +162,6 @@ io.on("connection", (socket) => {
         io.to(socket.id).emit("signup:error", { error: err.message });
         return;
       }
-      console.log("Connected to MySQL ", connection.threadId);
 
       const { email, verifyCode } = data;
       connection.query(
@@ -200,7 +212,6 @@ io.on("connection", (socket) => {
         io.to(socket.id).emit("signup:error", { error: err.message });
         return;
       }
-      console.log("Connected to MySQL ", connection.threadId);
 
       connection.query(
         "SELECT * FROM users WHERE email = ?",
